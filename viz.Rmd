@@ -1,0 +1,465 @@
+---
+title: "COVID-19 Visualizations"
+author: "Joseph Nardi"
+date: "4/2/2020"
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+library(dplyr)
+library(ggplot2)
+library(ggiraph)
+library(readr)
+library(leaflet)
+library(geojsonio)
+library(scales)
+library(sp)
+library(plotly)
+```
+
+```{r, echo=FALSE,  warning=FALSE, message=FALSE}
+to_date <- "2020-04-22"
+start_date <- "2020-03-22"
+per_day_country_data_final2 <- read.csv("country_data_final2_test10.csv")
+per_day_country_data_final2$Date <- as.Date(per_day_country_data_final2$Date, format="%m-%d-%Y")
+per_day_country_data_final2 <- per_day_country_data_final2[,c(-1)]
+colnames(per_day_country_data_final2)[3] <- "id"
+per_day_US_final2 <- read.csv("US_data_final2_test15.csv")
+per_day_US_final2$Date <- as.Date(per_day_US_final2$Date, format="%m-%d-%Y")
+per_day_US_final2 <- per_day_US_final2[,c(-1)]
+per_day_state_data_pop_final3 <- read_csv("state_data_final3_test33.csv")
+per_day_state_data_pop_final3$Date = as.Date(per_day_state_data_pop_final3$Date, format="%m-%d-%Y")
+per_day_state_data_pop_final3 <- per_day_state_data_pop_final3[,c(-1)]
+colnames(per_day_state_data_pop_final3)[1] <- "name"
+per_day_county_final4 <- read_csv("county_data_final4_test30.csv")
+per_day_county_final4 <- per_day_county_final4 %>% 
+  mutate(name = paste(Admin2, Province_State, sep = ", "))
+per_day_county_final4$date = as.Date(per_day_county_final4$date, format="%m-%d-%Y")
+per_day_county_final4 <- as.data.frame(per_day_county_final4)
+per_day_county_final4 <- per_day_county_final4[,c(-1)]
+colnames(per_day_county_final4)[1] <- "id"
+per_day_county_final4 <- per_day_county_final4 %>% 
+  arrange(id)
+```
+
+```{r, echo=FALSE,  warning=FALSE, message=FALSE}
+url <- 'https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json'
+counties <- geojsonio::geojson_read(url, what = "sp")
+url2 <- "https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json"
+states <- geojsonio::geojson_read(url2, what = "sp")
+url3 <- "https://raw.githubusercontent.com/johan/world.geo.json/master/countries.geo.json"
+countries <- geojsonio::geojson_read(url3, what = "sp")
+```
+
+
+```{r, echo=FALSE,  warning=FALSE, message=FALSE}
+# Define UI for random distribution app ----
+ui <- navbarPage(
+
+  # App title ----
+  titlePanel("COVID-19 Maps"),
+
+    # Main panel for displaying outputs ----
+    mainPanel(
+      conditionalPanel(condition = "input.tabs==1",
+         inputPanel(sliderInput("date8", label = "Date:",
+              min = as.Date("2020-03-22"), max = as.Date(to_date), value = as.Date("2020-03-22"), animate=TRUE), selectInput("var8", label = "Variable :", choices = c("Cases" = "total_confirmed", "Deaths" = "total_deaths", "Death Rate" = "death_rate", "Recovered" = "total_recovered", "Active" = "total_active")), selectInput("cat8", label = "Category :", choices = c("Total" = "value", "Per 100,000" = "per_100_thousand", "Total Daily Change" = "change", "Total Daily Change Per 100,000" = "change_per_100_thousand", "Total Daily Percent Change" = "percent_change", "Days to Double" = "double")))
+      ),
+      
+      conditionalPanel(condition = "input.tabs==2",
+         inputPanel(
+  sliderInput("date", label = "Date:",
+              min = as.Date("2020-03-22"), max = as.Date(to_date), value = as.Date("2020-03-22"), animate=TRUE), selectInput("var", label = "Variable :", choices = c("Cases" = "total_confirmed", "Deaths" = "total_deaths", "Death Rate" = "death_rate", "Recovered" = "total_recovered", "Active" = "total_active", "Tested" = "People_Tested", "Positive Rate" = "positive_rate", "Hospitalized" = "People_Hospitalized", "Hospitalization Rate" = "hospitalization_rate")), selectInput("cat", label = "Category :", choices = c("Total" = "value", "Per 100,000" = "per_100_thousand", "Total Daily Change" = "change", "Total Daily Change Per 100,000" = "change_per_100_thousand", "Total Daily Percent Change" = "percent_change", "Days to Double" = "double")))
+      ),
+  conditionalPanel(condition = "input.tabs==3",
+         inputPanel(
+  sliderInput("date2", label = "Date:",
+              min = as.Date("2020-03-22"), max = as.Date(to_date), value = as.Date("2020-03-22"), animate=TRUE), selectInput("var2", label = "Variable :", choices = c("Cases" = "Confirmed", "Deaths" = "Deaths", "Death Rate" = "death_rate", "Recovered" = "Recovered", "Active" = "Active")), selectInput("cat3", label = "Category :", choices = c("Total" = "value", "Per 100,000" = "per_100_thousand", "Total Daily Change" = "change", "Total Daily Change Per 100,000" = "change_per_100_thousand", "Total Daily Percent Change" = "percent_change", "Days to Double" = "double")))
+),
+
+      # Output: Tabset w/ plot, summary, and table ----
+      tabsetPanel(id = "tabs", type = "tabs",
+                  tabPanel("Country", leafletOutput(outputId = "country_map"), value = 1,  style = "overflow:hidden;"),
+                  tabPanel("State", leafletOutput(outputId = "state_map"),  value = 2,  style = "overflow:hidden;"),
+                  tabPanel("County", leafletOutput(outputId  ="county_map"),value = 3,  style = "overflow:hidden;")
+      )
+
+    )
+)
+
+# Define server logic for random distribution app ----
+server <- function(input, output) {
+
+  # Reactive expression to generate the requested distribution ----
+  # This is called whenever the inputs change. The output functions
+  # defined below then use the value computed from this expression
+  
+  react_data16 <- reactive({
+    per_day_country_data_final2 <- per_day_country_data_final2%>% 
+      filter(Date == input$date8) %>% 
+      filter(variable == input$var8) %>% 
+      filter(category == input$cat8)
+  })
+  
+  react_data17 <- reactive({
+    countries <-  sp::merge(countries,react_data16(), by="id", all.x = TRUE, duplicateGeoms = TRUE)
+  })
+  
+  react_data3 <- reactive({
+    per_day_state_data_pop_final3 <- per_day_state_data_pop_final3%>% 
+      filter(Date == input$date) %>% 
+      filter(variable == input$var) %>% 
+      filter(category == input$cat)
+  })
+  
+  react_data4 <- reactive({
+ states <-  sp::merge(states,react_data3(), by="name", all.x = TRUE, duplicateGeoms = TRUE)
+  })
+  
+  react_data <- reactive({
+    per_day_county_final4 <- per_day_county_final4%>% 
+      filter(date == input$date2) %>% 
+      filter(variable == input$var2) %>% 
+      filter(category == input$cat3)
+  })
+
+react_data2 <- reactive({
+ counties <-  sp::merge(counties,react_data(), by="id", all.x = TRUE, duplicateGeoms = TRUE)
+  })
+
+
+  # Generate a plot of the data ----
+  # Also uses the inputs to build the plot label. Note that the
+  # dependencies on the inputs and the data reactive expression are
+  # both tracked, and all expressions are called in the sequence
+  # implied by the dependency graph.
+  output$country_map <- renderLeaflet({
+  leaflet() %>%
+    addTiles("MapBox") %>% 
+    addPolygons(data = react_data17(), weight = 1,opacity = 1, color = "black", fillOpacity = 0.7, fillColor = ~colorNumeric("YlOrRd", react_data17()$value, na.color = "#808080", domain = c(0,quantile(react_data17()$value, probs = 0.95, na.rm = TRUE)))(squish(react_data17()$value, range = c(0,quantile(react_data17()$value, probs = 0.95, na.rm = TRUE)), only.finite = TRUE)), label = lapply(react_data17()$tooltip, HTML),
+    labelOptions = labelOptions(
+      style = list("font-weight" = "normal", padding = "3px 8px"),
+      textsize = "15px",
+      direction = "auto")) %>%
+  addLegend(pal = colorNumeric("YlOrRd", react_data17()$value, na.color = "#808080", domain = c(0,quantile(react_data17()$value, probs = 0.95, na.rm = TRUE))), values = squish(react_data17()$value, range = c(0,quantile(react_data17()$value, probs = 0.95, na.rm = TRUE)), only.finite = TRUE), opacity = 0.7, title = NULL, position = "bottomright")
+  
+})
+
+  # Generate a summary of the data ----
+  output$state_map <- renderLeaflet({
+  leaflet() %>%
+  setView(-96, 37.8, 4) %>% 
+    addTiles("MapBox") %>% 
+    addPolygons(data = react_data4(), weight = 1,opacity = 1, color = "black", fillOpacity = 0.7, fillColor = ~colorNumeric("YlOrRd", react_data4()$value, na.color = "#808080", domain = c(0,quantile(react_data4()$value, probs = 0.95, na.rm = TRUE)))(squish(react_data4()$value, range = c(0,quantile(react_data4()$value, probs = 0.95, na.rm = TRUE)), only.finite = TRUE)), label = lapply(react_data4()$tooltip, HTML),
+    labelOptions = labelOptions(
+      style = list("font-weight" = "normal", padding = "3px 8px"),
+      textsize = "15px",
+      direction = "auto")) %>%
+  addLegend(pal = colorNumeric("YlOrRd", react_data4()$value, na.color = "#808080", domain = c(0,quantile(react_data4()$value, probs = 0.95, na.rm = TRUE))), values = squish(react_data4()$value, range = c(0,quantile(react_data4()$value, probs = 0.95, na.rm = TRUE)), only.finite = TRUE), opacity = 0.7, title = NULL, position = "bottomright")
+  
+})
+
+  # Generate an HTML table view of the data ----
+  output$county_map <- renderLeaflet({
+  leaflet() %>%
+  setView(-96, 37.8, 4) %>% 
+    addTiles("MapBox") %>% 
+    addPolygons(data = react_data2(), weight = 1,opacity = 1, color = "black", fillOpacity = 0.7, fillColor = ~colorNumeric("YlOrRd", react_data2()$value, na.color = "#808080", domain = c(0,quantile(react_data2()$value, probs = 0.95, na.rm = TRUE)))(squish(react_data2()$value, range = c(0,quantile(react_data2()$value, probs = 0.95, na.rm = TRUE)), only.finite = TRUE)), label = lapply(react_data2()$tooltip, HTML),
+    labelOptions = labelOptions(
+      style = list("font-weight" = "normal", padding = "3px 8px"),
+      textsize = "15px",
+      direction = "auto")) %>%
+  addLegend(pal = colorNumeric("YlOrRd", react_data2()$value, na.color = "#808080", domain = c(0,quantile(react_data2()$value, probs = 0.95, na.rm = TRUE))), values = squish(react_data2()$value, range = c(0,quantile(react_data2()$value, probs = 0.95, na.rm = TRUE)), only.finite = TRUE), opacity = 0.7, title = NULL, position = "bottomright")
+  
+})
+
+}
+
+
+# Create Shiny app ----
+shinyApp(ui, server)
+```
+
+
+```{r, echo=FALSE,  warning=FALSE, message=FALSE}
+# Define UI for random distribution app ----
+ui <- navbarPage(
+
+  # App title ----
+  titlePanel("COVID-19 Time Series"),
+
+    # Main panel for displaying outputs ----
+    mainPanel(
+      conditionalPanel(condition = "input.tabs==1",
+                       inputPanel(
+ selectInput("var9", label = "Variable :", choices = c("Cases" = "total_confirmed", "Deaths" = "total_deaths", "Death Rate" = "death_rate", "Recovered" = "total_recovered", "Active" = "total_active")), selectInput("cat9", label = "Category :", choices = c("Total" = "value", "Per 100,000" = "per_100_thousand", "Total Daily Change" = "change", "Total Daily Change Per 100,000" = "change_per_100_thousand", "Total Daily Percent Change" = "percent_change", "Days to Double" = "double")), textInput("country", label = "Country", value = "Enter country here"), checkboxInput("log9", "Log Data", FALSE)
+)
+         
+      ),
+      
+      conditionalPanel(condition = "input.tabs==2",
+                       inputPanel(
+ selectInput("var7", label = "Variable :", choices = c("Cases" = "total_confirmed", "Deaths" = "total_deaths", "Death Rate" = "death_rate", "Recovered" = "total_recovered", "Active" = "total_active", "Tested" = "total_tested", "Positive Rate" = "positive_rate", "Hospitalized" = "total_hospitalized", "Hospitalization Rate" = "hospitalization_rate")), selectInput("cat7", label = "Category :", choices = c("Total" = "value", "Per 100,000" = "per_100_thousand", "Total Daily Change" = "change", "Total Daily Change Per 100,000" = "change_per_100_thousand", "Total Daily Percent Change" = "percent_change", "Days to Double" = "double")), checkboxInput("log5", "Log Data", FALSE)
+)
+         
+      ),
+  conditionalPanel(condition = "input.tabs==3",
+                   inputPanel(
+ selectInput("var3", label = "Variable :", choices = c("Cases" = "total_confirmed", "Deaths" = "total_deaths", "Death Rate" = "death_rate", "Recovered" = "total_recovered", "Active" = "total_active", "Tested" = "People_Tested", "Positive Rate" = "positive_rate", "Hospitalized" = "People_Hospitalized", "Hospitalization Rate" = "hospitalization_rate")), selectInput("cat2", label = "Category :", choices = c("Total" = "value", "Per 100,000" = "per_100_thousand", "Total Daily Change" = "change", "Total Daily Change Per 100,000" = "change_per_100_thousand", "Total Daily Percent Change" = "percent_change", "Days to Double" = "double")), textInput("state", label = "State", value = "Enter state here"), checkboxInput("log", "Log Data", FALSE)
+)
+        
+),
+  conditionalPanel(condition = "input.tabs==4",
+                   inputPanel(
+  selectInput("var4", label = "Variable :", choices = c("Cases" = "Confirmed", "Deaths" = "Deaths", "Death Rate" = "death_rate", "Recovered" = "Recovered", "Active" = "Active")), selectInput("cat4", label = "Category :", choices = c("Total" = "value", "Per 100,000" = "per_100_thousand", "Total Daily Change" = "change", "Total Daily Change Per 100,000" = "change_per_100_thousand", "Total Daily Percent Change" = "percent_change", "Days to Double" = "double")), textInput("state2", label = "State", value = "Enter state here"), textInput("county", label = "County", value = "Enter county here"), checkboxInput("log2", "Log Data", FALSE)
+)
+
+        
+),
+
+      # Output: Tabset w/ plot, summary, and table ----
+      tabsetPanel(id = "tabs", type = "tabs",
+                  tabPanel("Country", girafeOutput(outputId = "country_time_series"), value = 1,  style = "overflow:hidden;"),
+                  tabPanel("US", girafeOutput(outputId = "US_time_series"), value = 2,  style = "overflow:hidden;"),
+                  tabPanel("State", girafeOutput(outputId = "state_time_series"),  value = 3,  style = "overflow:hidden;"),
+                  tabPanel("County", girafeOutput(outputId  ="county_time_series"),value = 4,  style = "overflow:hidden;")
+      )
+
+    )
+)
+
+# Define server logic for random distribution app ----
+server <- function(input, output) {
+
+  # Reactive expression to generate the requested distribution ----
+  # This is called whenever the inputs change. The output functions
+  # defined below then use the value computed from this expression
+  
+  react_data18 <- reactive({
+per_day_country_data_final2 <- per_day_country_data_final2%>%
+  filter(variable == input$var9) %>% 
+  filter(category == input$cat9) %>% 
+  filter(Country_Region == input$country)
+  })
+
+react_data19 <- reactive({
+  if(input$log9 == TRUE){
+    per_day_country_data_final2 <- react_data18() %>% 
+      mutate(value = log(value))
+  } else {
+    per_day_country_data_final2  <- react_data18()
+  }
+  })
+
+react_data14 <- reactive({
+per_day_US_final2 <- per_day_US_final2%>%
+  filter(variable == input$var7) %>% 
+  filter(category == input$cat7)
+  })
+
+react_data15 <- reactive({
+  if(input$log5 == TRUE){
+    per_day_US_final2 <- react_data14() %>% 
+      mutate(value = log(value))
+  } else {
+    per_day_US_final2  <- react_data14()
+  }
+  })
+
+react_data5 <- reactive({
+per_day_state_data_pop_final3 <- per_day_state_data_pop_final3%>%
+  filter(name == input$state) %>% 
+  filter(variable == input$var3) %>% 
+  filter(category == input$cat2)
+  })
+
+react_data6 <- reactive({
+  if(input$log == TRUE){
+    per_day_state_data_pop_final3 <- react_data5() %>% 
+      mutate(value = log(value))
+  } else {
+    per_day_state_data_pop_final3  <- react_data5()
+  }
+  })
+
+
+react_data7 <- reactive({
+per_day_county_final4 <- per_day_county_final4 %>% 
+  filter(Province_State == input$state2) %>% 
+  filter(Admin2 == input$county) %>% 
+  filter(variable == input$var4) %>% 
+  filter(category == input$cat4)
+  })
+
+react_data8 <- reactive({
+  if(input$log2 == TRUE){
+    per_day_state_data_pop_final3 <- react_data7() %>% 
+      mutate(value = log(value))
+  } else {
+    per_day_state_data_pop_final3  <- react_data7()
+  }
+  })
+
+
+  # Generate a plot of the data ----
+  # Also uses the inputs to build the plot label. Note that the
+  # dependencies on the inputs and the data reactive expression are
+  # both tracked, and all expressions are called in the sequence
+  # implied by the dependency graph.
+  output$country_time_series <- renderGirafe({ girafe(ggobj = ggplot(data=react_data19(), aes(x=Date, y=value, group=1)) + geom_line()+ geom_point_interactive(aes(tooltip = tooltip)), width_svg = 10) %>%  girafe_options(opts_zoom(min = .7, max = 8))
+})
+  
+  # Generate a summary of the data ----
+  output$US_time_series <- renderGirafe({ girafe(ggobj = ggplot(data=react_data15(), aes(x=Date, y=value, group=1)) + geom_line()+ geom_point_interactive(aes(tooltip = tooltip)), width_svg = 10) %>%  girafe_options(opts_zoom(min = .7, max = 8))
+})
+
+  # Generate an HTML table view of the data ----
+  output$state_time_series <- renderGirafe({ girafe(ggobj = ggplot(data=react_data6(), aes(x=Date, y=value, group=1)) + geom_line()+ geom_point_interactive(aes(tooltip = tooltip)), width_svg = 10) %>%  girafe_options(opts_zoom(min = .7, max = 8))
+})
+
+output$county_time_series <- renderGirafe({ girafe(ggobj = ggplot(data=react_data8(), aes(x=date, y=value, group=1)) + geom_line()+ geom_point_interactive(aes(tooltip = tooltip)), width_svg = 10) %>%  girafe_options(opts_zoom(min = .7, max = 8))
+})
+
+}
+
+
+# Create Shiny app ----
+shinyApp(ui, server)
+```
+
+
+```{r, echo=FALSE,  warning=FALSE, message=FALSE}
+# Define UI for random distribution app ----
+ui <- navbarPage(
+
+  # App title ----
+  titlePanel("COVID-19 Time Series Comparison"),
+
+    # Main panel for displaying outputs ----
+    mainPanel(
+      conditionalPanel(condition = "input.tabs==1",
+                    inputPanel(
+ selectInput("var10", label = "Variable :", choices = c("Cases" = "total_confirmed", "Deaths" = "total_deaths", "Death Rate" = "death_rate", "Recovered" = "total_recovered", "Active" = "total_active")), selectInput("cat10", label = "Category :", choices = c("Total" = "value", "Per 100,000" = "per_100_thousand", "Total Daily Change" = "change", "Total Daily Change Per 100,000" = "change_per_100_thousand", "Total Daily Percent Change" = "percent_change", "Days to Double" = "double")), checkboxInput("log10", "Log Data", FALSE)
+)
+         
+      ),
+      
+      conditionalPanel(condition = "input.tabs==2",
+inputPanel(
+ selectInput("var5", label = "Variable :", choices = c("Cases" = "total_confirmed", "Deaths" = "total_deaths", "Death Rate" = "death_rate", "Recovered" = "total_recovered", "Active" = "total_active", "Tested" = "People_Tested", "Positive Rate" = "positive_rate", "Hospitalized" = "People_Hospitalized", "Hospitalization Rate" = "hospitalization_rate")), selectInput("cat5", label = "Category :", choices = c("Total" = "value", "Per 100,000" = "per_100_thousand", "Total Daily Change" = "change", "Total Daily Change Per 100,000" = "change_per_100_thousand", "Total Daily Percent Change" = "percent_change", "Days to Double" = "double")), checkboxInput("log3", "Log Data", FALSE), checkboxInput("new", "Remove NY", FALSE)
+)
+         
+      ),
+  conditionalPanel(condition = "input.tabs==3",
+                   inputPanel( selectInput("state2", label = "State :", choices =  c("Alabama" = "Alabama", "Alaska" = "Alaska", "Arizona" = "Arizona", "Arkansas" = "Arkansas", "California" = "California", "Colorado" = "Colorado", "Connecticut" = "Connecticut", "Delaware" = "Delaware", "District of Columbia" = "District of Columbia", "Florida" = "Florida", "Georgia" = "Georgia", "Hawaii" = "Hawaii", "Idaho" = "Idaho", "Illinois" = "Illinois", "Indiana" = "Indiana" , "Iowa" = "Iowa", "Kansas" = "Kansas", "Kentucky" = "Kentucky", "Louisiana" = "Louisiana", "Maine" = "Maine", "Maryland" = "Maryland", "Massachusetts" = "Massachusetts", "Michigan" = "Michigan", "Minnesota" = "Minnesota", "Mississippi" = "Mississippi", "Missouri" = "Missouri", "Montana" = "Montana", "Nebraska" = "Nebraska", "Nevada" = "Nevada", "New Hampshire" = "New Hampshire", "New Jersey" = "New Jersey", "New Mexico" = "New Mexico", "New York" = "New York", "North Carolina" = "North Carolina", "North Dakota" = "North Dakota", "Ohio" = "Ohio", "Oklahoma" = "Oklahoma", "Oregon" = "Oregon", "Pennsylvania" = "Pennsylvania", "Rhode Island" = "Rhode Island", "South Carolina" = "South Carolina", "South Dakota" = "South Dakota", "Tennessee" = "Tennessee", "Texas" = "Texas", "Utah" = "Utah", "Vermont" = "Vermont", "Virginia" = "Virginia", "Washinton" = "Washington", "West Virginia" = "West Virginia", "Wisconsin" = "Wisconsin", "Wyoming" = "Wyoming")),
+ selectInput("var6", label = "Variable :", choices = c("Cases" = "Confirmed", "Deaths" = "Deaths", "Death Rate" = "death_rate", "Recovered" = "Recovered", "Active" = "Active")), selectInput("cat6", label = "Category :", choices = c("Total" = "value", "Per 100,000" = "per_100_thousand", "Total Daily Change" = "change", "Total Daily Change Per 100,000" = "change_per_100_thousand", "Total Daily Percent Change" = "percent_change", "Days to Double" = "double")), checkboxInput("log4", "Log Data", FALSE)
+)
+        
+),
+
+      # Output: Tabset w/ plot, summary, and table ----
+      tabsetPanel(id = "tabs", type = "tabs",
+                  tabPanel("Country", plotlyOutput(outputId = "country_time_series_compare"), value = 1,  style = "overflow:hidden;"),
+                  tabPanel("State", plotlyOutput(outputId = "state_time_series_compare"),  value = 2,  style = "overflow:hidden;"),
+                  tabPanel("County", plotlyOutput(outputId  ="county_time_series_compare"),value = 3,  style = "overflow:hidden;")
+      )
+
+    )
+)
+
+# Define server logic for random distribution app ----
+server <- function(input, output) {
+
+  # Reactive expression to generate the requested distribution ----
+  # This is called whenever the inputs change. The output functions
+  # defined below then use the value computed from this expression
+  
+  
+  react_data20 <- reactive({
+per_day_country_data_final2 <- per_day_country_data_final2 %>%
+  filter(variable == input$var10) %>% 
+  filter(category == input$cat10)
+  })
+
+react_data21 <- reactive({
+  if(input$log10 == TRUE){
+    per_day_country_data_final2 <- react_data20() %>% 
+      mutate(value = log(value))
+  } else {
+    per_day_country_data_final2  <- react_data20()
+  }
+  })
+
+react_data9 <- reactive({
+per_day_state_data_pop_final3 <- per_day_state_data_pop_final3 %>%
+  filter(variable == input$var5) %>% 
+  filter(category == input$cat5)
+  })
+
+react_data10 <- reactive({
+  if(input$log3 == TRUE){
+    per_day_state_data_pop_final3 <- react_data9() %>% 
+      mutate(value = log(value))
+  } else {
+    per_day_state_data_pop_final3  <- react_data9()
+  }
+  })
+
+react_data11 <- reactive({
+  if(input$new == TRUE){
+    per_day_state_data_pop_final3 <- react_data10() %>% 
+      filter(name != "New York")
+  } else {
+    per_day_state_data_pop_final3  <- react_data10()
+  }
+  })
+
+
+react_data12 <- reactive({
+per_day_county_final4 <- per_day_county_final4 %>%
+  filter(variable == input$var6) %>% 
+  filter(category == input$cat6) %>% 
+  filter(Province_State == input$state2)
+  })
+
+react_data13 <- reactive({
+  if(input$log4 == TRUE){
+    per_day_county_final4 <- react_data12() %>% 
+      mutate(value = log(value))
+  } else {
+    per_day_county_final4  <- react_data12()
+  }
+  })
+  
+
+  # Generate a plot of the data ----
+  # Also uses the inputs to build the plot label. Note that the
+  # dependencies on the inputs and the data reactive expression are
+  # both tracked, and all expressions are called in the sequence
+  # implied by the dependency graph.
+  output$country_time_series_compare <- renderPlotly({
+  highlight(plot_ly(highlight_key(react_data21(), ~Country_Region), x = ~Date, y = ~value, name = ~Country_Region, type = 'scatter', mode = 'lines+markers'),on = "plotly_click", 
+  dynamic = TRUE) 
+})
+  
+  # Generate an HTML table view of the data ----
+  output$state_time_series_compare <- renderPlotly({
+  highlight(plot_ly(highlight_key(react_data11(), ~name), x = ~Date, y = ~value, name = ~name, type = 'scatter', mode = 'lines+markers'),on = "plotly_click", 
+  dynamic = TRUE) 
+})
+
+output$county_time_series_compare <- renderPlotly({
+  highlight(plot_ly(highlight_key(react_data13(), ~name), x = ~date, y = ~value, name = ~name, type = 'scatter', mode = 'lines+markers'),on = "plotly_click", 
+  dynamic = TRUE) 
+})
+
+}
+
+
+# Create Shiny app ----
+shinyApp(ui, server)
+```

@@ -1,0 +1,515 @@
+---
+title: "Cases"
+author: "Joseph Nardi"
+date: "4/2/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Load Packages
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+library(dplyr)
+library(readxl)
+library(stringr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+library(USAboundaries)
+library(sf)
+library(rgeos)
+library(ggspatial)
+library(tmaptools)
+```
+
+#Get data from github, combine into one data frame
+```{r, echo=FALSE,  warning=FALSE, message=FALSE}
+to_date <- "2020-04-22"
+start_date <- "2020-03-22"
+url_list <- paste0("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_daily_reports/", paste0(format(seq(as.Date(start_date), as.Date(to_date), by="days"), format="%m-%d-%Y"), ".csv"))
+#Empty dataframe to add data to
+all_data <- data.frame()
+#For loop that iterates over all of the urls
+for (item in url_list){
+  url <- item
+  #read in the data from one url
+  cur_data <- read.csv(url)
+  cur_data <- cur_data[,c(1:12)]
+  cur_data$date <- substr(url, 113, 122)
+  colnames(cur_data) <- c("FIPS", "Admin2", "Province_State", "Country_Region", "Last_Update", "Lat", "Long", "Confirmed", "Deaths", "Recovered", "Active", "Combined_Key", "Date")
+  #add the data from one url to the main dataframe
+  all_data <- rbind(all_data, cur_data)
+}
+
+```
+
+
+#Get state data from github, combine into one data frame
+```{r}
+to_date_state <- "2020-05-12"
+start_date_state <- "2020-04-12"
+url_list_state <- paste0("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_daily_reports_us/", paste0(format(seq(as.Date(start_date_state), as.Date(to_date_state), by="days"), format="%m-%d-%Y"), ".csv"))
+all_data_state <- data.frame()
+for (date in url_list_state){
+  url_state <- date
+  cur_data_state <- read.csv(url_state)
+  cur_data_state$date <- substr(url_state, 116, 125)
+  all_data_state <- rbind(all_data_state, cur_data_state)
+}
+```
+
+
+#State change per day
+```{r, echo=FALSE,  warning=FALSE, message=FALSE}
+per_day_state_data <- all_data %>% 
+  group_by(Date,Province_State,Country_Region) %>% 
+  summarise(total_confirmed = sum(Confirmed), total_deaths = sum(Deaths), total_recovered = sum(Recovered), total_active = sum(Active))
+per_day_state_data2 <- per_day_state_data %>% 
+  group_by(Province_State, Country_Region) %>% 
+  mutate(total_confirmed_day_before = lag(total_confirmed))
+per_day_state_data3 <- per_day_state_data2 %>% 
+  mutate(day_change_confirmed = total_confirmed - total_confirmed_day_before)
+```
+
+
+#US change per day
+```{r}
+per_day_country_data <- all_data %>% 
+  group_by(Date,Country_Region) %>% 
+  summarise(total_confirmed = sum(Confirmed), total_deaths = sum(Deaths), total_recovered = sum(Recovered), total_active = sum(Active))
+per_day_US <- per_day_country_data %>% 
+  filter(Country_Region == "US")
+per_day_US_testing <- all_data_state %>% 
+  group_by(date, Country_Region) %>% 
+  summarise(total_tested = sum(People_Tested, na.rm = TRUE), total_hospitalized = sum(People_Hospitalized, na.rm = TRUE))
+per_day_US_testing2 <- per_day_US_testing %>% 
+  filter(Country_Region == "US")
+per_day_US2 <- left_join(per_day_US, per_day_US_testing2, by = c("Date" = "date", "Country_Region" = "Country_Region"))
+per_day_US3 <- per_day_US2 %>% 
+  mutate(death_rate = total_deaths / total_confirmed) %>% 
+  mutate(hospitalization_rate = total_hospitalized / total_confirmed) %>% 
+  mutate(positive_rate = total_confirmed / total_tested)
+per_day_US3 <- per_day_US3 %>% 
+  group_by(Country_Region) %>% 
+  mutate(one_week_total = total_confirmed - lag(total_confirmed, 7)) %>% 
+  mutate(two_week_total = total_confirmed - lag(total_confirmed, 14))
+per_day_US3a <- per_day_US3 %>% 
+  group_by(Country_Region) %>% 
+  mutate(total_confirmed = total_confirmed - lag(total_confirmed)) %>%
+  mutate(total_deaths = total_deaths - lag(total_deaths)) %>% 
+  mutate(total_recovered = total_recovered - lag(total_recovered)) %>% 
+  mutate(total_active = total_active - lag(total_active)) %>% 
+  mutate(total_tested = total_tested - lag(total_tested)) %>% 
+  mutate(total_hospitalized = total_hospitalized - lag(total_hospitalized)) %>% 
+  mutate(death_rate = death_rate - lag(death_rate)) %>% 
+  mutate(hospitalization_rate = hospitalization_rate - lag(hospitalization_rate)) %>% 
+  mutate(positive_rate = positive_rate - lag(positive_rate)) %>% 
+  mutate(one_week_total = one_week_total - lag(total_confirmed, 7)) %>% 
+  mutate(two_week_total = two_week_total - lag(total_confirmed, 14))
+per_day_US3b <- per_day_US3 %>% 
+  group_by(Country_Region) %>% 
+  mutate(total_confirmed = ((total_confirmed - lag(total_confirmed)) / lag(total_confirmed))) %>%
+  mutate(total_deaths = ((total_deaths - lag(total_deaths)) / lag(total_deaths)))%>% 
+  mutate(total_recovered = ((total_recovered - lag(total_recovered)) / lag(total_recovered))) %>% 
+  mutate(total_active = ((total_active - lag(total_active)) / lag(total_active))) %>% 
+  mutate(total_tested = ((total_tested - lag(total_tested)) / lag(total_tested))) %>% 
+  mutate(total_hospitalized = ((total_hospitalized - lag(total_hospitalized))/ lag(total_hospitalized))) %>% 
+  mutate(death_rate = ((death_rate - lag(death_rate))/ lag(death_rate))) %>% 
+  mutate(hospitalization_rate = ((hospitalization_rate - lag(hospitalization_rate))/ lag(hospitalization_rate))) %>% 
+  mutate(positive_rate = ((positive_rate - lag(positive_rate))/ lag(positive_rate))) %>% 
+  mutate(one_week_total = ((one_week_total - lag(one_week_total, 7))/ lag(one_week_total,7))) %>% 
+  mutate(two_week_total = ((two_week_total - lag(two_week_total, 14))/ lag(two_week_total, 14)))
+per_day_US3c <- per_day_US3 %>%
+  group_by(Country_Region) %>% 
+  mutate(total_confirmed = ((log(2)) / (log(1+((total_confirmed - lag(total_confirmed)) / lag(total_confirmed)))))) %>%
+  mutate(total_deaths = ((log(2)) / (log(1+((total_deaths - lag(total_deaths)) / lag(total_deaths))))))%>% 
+  mutate(total_recovered = ((log(2)) / (log(1+((total_recovered - lag(total_recovered)) / lag(total_recovered)))))) %>% 
+  mutate(total_active = ((log(2)) / (log(1+((total_active - lag(total_active)) / lag(total_active)))))) %>% 
+  mutate(total_tested = ((log(2)) / (log(1+((total_tested - lag(total_tested)) / lag(total_tested)))))) %>% 
+  mutate(total_hospitalized = ((log(2)) / (log(1+((total_hospitalized - lag(total_hospitalized))/ lag(total_hospitalized)))))) %>% 
+  mutate(death_rate = ((log(2)) / (log(1+((death_rate - lag(death_rate))/ lag(death_rate)))))) %>% 
+  mutate(hospitalization_rate = ((log(2)) / (log(1+((hospitalization_rate - lag(hospitalization_rate))/ lag(hospitalization_rate)))))) %>% 
+  mutate(positive_rate = ((log(2)) / (log(1+((positive_rate - lag(positive_rate))/ lag(positive_rate)))))) %>% 
+  mutate(one_week_total = ((log(2)) / (log(1+((one_week_total - lag(one_week_total, 7))/ lag(one_week_total, 7)))))) %>% 
+  mutate(two_week_total = ((log(2)) / (log(1+((two_week_total - lag(two_week_total, 14))/ lag(two_week_total, 14))))))
+per_day_US3d <- per_day_US3 %>%
+  group_by(Country_Region) %>% 
+  mutate(total_confirmed = ((total_confirmed - lag(total_confirmed)) / 331002651)*100000) %>%
+  mutate(total_deaths = ((total_deaths - lag(total_deaths)) / 331002651)*100000) %>% 
+  mutate(total_recovered = ((total_recovered - lag(total_recovered)) / 331002651)*100000) %>% 
+  mutate(total_active = ((total_active - lag(total_active)) / 331002651)*100000) %>% 
+  mutate(total_tested = ((total_tested - lag(total_tested)) / 331002651)*100000) %>% 
+  mutate(total_hospitalized = ((total_hospitalized - lag(total_hospitalized)) / 331002651)*100000) %>% 
+  mutate(death_rate = ((death_rate - lag(death_rate)) / 331002651)*100000) %>% 
+  mutate(hospitalization_rate = ((hospitalization_rate - lag(hospitalization_rate)) / 331002651)*100000) %>% 
+  mutate(positive_rate = ((positive_rate - lag(positive_rate)) / 331002651)*100000) %>% 
+  mutate(one_week_total = ((one_week_total - lag(one_week_total, 7)) / 331002651)*100000) %>% 
+  mutate(two_week_total = ((two_week_total - lag(two_week_total, 14)) / 331002651)*100000)
+per_day_US3e <- per_day_US3 %>% 
+  mutate(total_confirmed = (total_confirmed / 331002651)*100000) %>%
+  mutate(total_deaths = (total_deaths / 331002651)*100000) %>% 
+  mutate(total_recovered = (total_recovered / 331002651)*100000) %>% 
+  mutate(total_active = (total_active / 331002651)*100000) %>%
+  mutate(total_tested = (total_tested / 331002651)*100000) %>% 
+  mutate(total_hospitalized = (total_hospitalized / 331002651)*100000) %>% 
+  mutate(death_rate = (death_rate / 331002651)*100000) %>% 
+  mutate(hospitalization_rate = (hospitalization_rate / 331002651)*100000) %>% 
+  mutate(positive_rate = (positive_rate / 331002651)*100000) %>%
+  mutate(one_week_total = (one_week_total / 331002651)*100000) %>%
+  mutate(two_week_total = (two_week_total / 331002651)*100000)
+per_day_US4 <- gather(per_day_US3, "variable", "value", c(3:11))
+per_day_US4a <- gather(per_day_US3a, "variable", "value", c(3:11))
+per_day_US4b <- gather(per_day_US3b, "variable", "value", c(3:11))
+per_day_US4c <- gather(per_day_US3c, "variable", "value", c(3:11))
+per_day_US4d <- gather(per_day_US3d, "variable", "value", c(3:11))
+per_day_US4e <- gather(per_day_US3e, "variable", "value", c(3:11))
+per_day_US4$category <- "value"
+per_day_US4a$category <- "change"
+per_day_US4b$category <- "percent_change"
+per_day_US4c$category <- "double"
+per_day_US4d$category <- "change_per_100_thousand"
+per_day_US4e$category <- "per_100_thousand"
+per_day_US4_combined <- dplyr::bind_rows(per_day_US4, per_day_US4a)
+per_day_US4_combined2 <- dplyr::bind_rows(per_day_US4_combined, per_day_US4b)
+per_day_US4_combined3 <- dplyr::bind_rows(per_day_US4_combined2, per_day_US4c)
+per_day_US4_combined4 <- dplyr::bind_rows(per_day_US4_combined3, per_day_US4d)
+per_day_US4_combined5 <- dplyr::bind_rows(per_day_US4_combined4, per_day_US4e)
+per_day_US_final <- per_day_US4_combined5 %>%
+  mutate(variable_name = ifelse(variable == "total_confirmed", "Cases", ifelse(variable == "total_deaths", "Deaths", ifelse(variable == "total_active", "Active", ifelse(variable == "total_recovered", "Recovered", ifelse(variable == "total_hospitalized", "Hospitalized", ifelse(variable == "total_tested", "Teseted", ifelse(variable == "death_rate", "Death Rate", ifelse(variable == "hospitalization_rate", "Hospitalization Rate", ifelse(category == "positive_rate", "Positive Rate", " ")))))))))) %>% 
+  mutate(category_name = ifelse(category == "value", "Total", ifelse(category == "per_100_thousand", "Per 100,000", ifelse(category == "change","Total Daily Change", ifelse(category == "percent_change", "Total Daily Percent Change", ifelse(category == "double", "Days to Double", "Total Daily Change Per 100,000")))))) %>% 
+  mutate(tooltip = paste0("Country: ", Country_Region, "<br/>",
+  "Date: ", Date , "<br/>",
+  "Variable: ", variable_name, "<br/>",
+  "Category: ", category_name , "<br/>",
+  "Value: ", round(value, digits = 3)))
+per_day_country_data2 <- per_day_country_data %>%
+  group_by(Country_Region) %>% 
+  mutate(total_confirmed_day_before = lag(total_confirmed))
+per_day_country_data3 <- per_day_country_data2 %>% 
+  mutate(day_change_confirmed = total_confirmed - total_confirmed_day_before)
+```
+
+
+#Country Change Per Day
+
+```{r}
+all_countries_population <- read.csv("All_Countries_Population.csv")
+all_countries_population2 <- all_countries_population %>% 
+  filter(Year == 2018)
+all_countries_population3 <- all_countries_population2[,-c(3)]
+all_countries_population3$Country.Name[60]<- "Bahamas"
+all_countries_population3$Country.Name[252]<- "US"
+all_countries_population3$Country.Name[256]<- "Venezuela"
+all_countries_population3$Country.Name[148]<- "Syria"
+all_countries_population3$Country.Name[219]<- "Slovakia"
+all_countries_population3$Country.Name[230]<- "Saint Vincent and the Grenadines"
+all_countries_population3$Country.Name[228]<-"Saint Lucia"
+all_countries_population3$Country.Name[207]<-"Russia"
+all_countries_population3$Country.Name[153]<-"Kyrgyzstan"
+all_countries_population3$Country.Name[150]<- "Korea, South"
+all_countries_population3$Country.Name[137]<- "Iran"
+all_countries_population3$Country.Name[117]<-"Gambia"
+all_countries_population3$Country.Name[105]<- "Egypt"
+all_countries_population3$Country.Name[99]<-"Czechia"
+all_countries_population3$Country.Name[75]<-"Brunei"
+all_countries_population3$Country.Name[92]<- "Congo (Brazzaville)"
+all_countries_population3$Country.Name[91]<- "Congo (Kinshasa)"
+per_day_country_data4 <- per_day_country_data %>% 
+  mutate(death_rate = total_deaths / total_confirmed)
+per_day_country_data4 <- left_join(per_day_country_data4, all_countries_population3, by = c("Country_Region" = "Country.Name")) 
+per_day_country_data4a <- per_day_country_data4 %>% 
+  group_by(Country_Region) %>% 
+  mutate(total_confirmed = total_confirmed - lag(total_confirmed)) %>%
+  mutate(total_deaths = total_deaths - lag(total_deaths)) %>% 
+  mutate(total_recovered = total_recovered - lag(total_recovered)) %>% 
+  mutate(total_active = total_active - lag(total_active)) %>% 
+  mutate(death_rate = death_rate - lag(death_rate))
+per_day_country_data4b <- per_day_country_data4 %>% 
+  group_by(Country_Region) %>% 
+  mutate(total_confirmed = ((total_confirmed - lag(total_confirmed)) / lag(total_confirmed))) %>%
+  mutate(total_deaths = ((total_deaths - lag(total_deaths)) / lag(total_deaths)))%>% 
+  mutate(total_recovered = ((total_recovered - lag(total_recovered)) / lag(total_recovered))) %>% 
+  mutate(total_active = ((total_active - lag(total_active)) / lag(total_active))) %>% 
+  mutate(death_rate = ((death_rate - lag(death_rate))/ lag(death_rate)))
+per_day_country_data4c <- per_day_country_data4 %>%
+  group_by(Country_Region) %>% 
+  mutate(total_confirmed = ((log(2)) / (log(1+((total_confirmed - lag(total_confirmed)) / lag(total_confirmed)))))) %>%
+  mutate(total_deaths = ((log(2)) / (log(1+((total_deaths - lag(total_deaths)) / lag(total_deaths))))))%>% 
+  mutate(total_recovered = ((log(2)) / (log(1+((total_recovered - lag(total_recovered)) / lag(total_recovered)))))) %>% 
+  mutate(total_active = ((log(2)) / (log(1+((total_active - lag(total_active)) / lag(total_active)))))) %>% 
+  mutate(death_rate = ((log(2)) / (log(1+((death_rate - lag(death_rate))/ lag(death_rate))))))
+per_day_country_data4d <- per_day_country_data4 %>%
+  group_by(Country_Region) %>% 
+  mutate(total_confirmed = ((total_confirmed - lag(total_confirmed)) / Value)*100000) %>%
+  mutate(total_deaths = ((total_deaths - lag(total_deaths)) / Value)*100000) %>% 
+  mutate(total_recovered = ((total_recovered - lag(total_recovered)) / Value)*100000) %>% 
+  mutate(total_active = ((total_active - lag(total_active)) / Value)*100000) %>% 
+  mutate(death_rate = ((death_rate - lag(death_rate)) / Value)*100000)
+per_day_country_data4e <- per_day_country_data4 %>% 
+  mutate(total_confirmed = (total_confirmed / Value)*100000) %>%
+  mutate(total_deaths = (total_deaths / Value)*100000) %>% 
+  mutate(total_recovered = (total_recovered / Value)*100000) %>% 
+  mutate(total_active = (total_active / Value)*100000) %>%
+  mutate(death_rate = (death_rate / Value)*100000)
+per_day_country_data5 <- gather(per_day_country_data4, "variable", "value", c(3:7))
+per_day_country_data5a <- gather(per_day_country_data4a, "variable", "value", c(3:7))
+per_day_country_data5b <- gather(per_day_country_data4b, "variable", "value", c(3:7))
+per_day_country_data5c <- gather(per_day_country_data4c, "variable", "value", c(3:7))
+per_day_country_data5d <- gather(per_day_country_data4d, "variable", "value", c(3:7))
+per_day_country_data5e <- gather(per_day_country_data4e, "variable", "value", c(3:7))
+per_day_country_data5$category <- "value"
+per_day_country_data5a$category <- "change"
+per_day_country_data5b$category <- "percent_change"
+per_day_country_data5c$category <- "double"
+per_day_country_data5d$category <- "change_per_100_thousand"
+per_day_country_data5e$category <- "per_100_thousand"
+per_day_country_data5_combined <- dplyr::bind_rows(per_day_country_data5, per_day_country_data5a)
+per_day_country_data5_combined2 <- dplyr::bind_rows(per_day_country_data5_combined, per_day_country_data5b)
+per_day_country_data5_combined3 <- dplyr::bind_rows(per_day_country_data5_combined2, per_day_country_data5c)
+per_day_country_data5_combined4 <- dplyr::bind_rows(per_day_country_data5_combined3, per_day_country_data5d)
+per_day_country_data5_combined5 <- dplyr::bind_rows(per_day_country_data5_combined4, per_day_country_data5e)
+per_day_country_data_final <- per_day_country_data5_combined5 %>%
+  mutate(variable_name = ifelse(variable == "total_confirmed", "Cases", ifelse(variable == "total_deaths", "Deaths", ifelse(variable == "total_active", "Active", ifelse(variable == "total_recovered", "Recovered", ifelse(variable == "total_hospitalized", "Hospitalized", ifelse(variable == "total_tested", "Teseted", ifelse(variable == "death_rate", "Death Rate", ifelse(variable == "hospitalization_rate", "Hospitalization Rate", ifelse(category == "positive_rate", "Positive Rate", " ")))))))))) %>% 
+  mutate(category_name = ifelse(category == "value", "Total", ifelse(category == "per_100_thousand", "Per 100,000", ifelse(category == "change","Total Daily Change", ifelse(category == "percent_change", "Total Daily Percent Change", ifelse(category == "double", "Days to Double", "Total Daily Change Per 100,000")))))) %>% 
+  mutate(tooltip = paste0("Country: ", Country_Region, "<br/>",
+  "Date: ", Date , "<br/>",
+  "Variable: ", variable_name, "<br/>",
+  "Category: ", category_name , "<br/>",
+  "Value: ", round(value, digits = 3)))
+```
+
+#World Total
+```{r, echo=FALSE,  warning=FALSE, message=FALSE}
+to_date_correct <- format(as.Date(to_date), format="%m-%d-%Y")
+to_date_data <- all_data %>% 
+  filter(Date == to_date_correct)
+to_date_state_data <- to_date_data %>% 
+  group_by(Province_State) %>% 
+  summarise(total_confirmed = sum(Confirmed), total_deaths = sum(Deaths), total_recovered = sum(Recovered), total_active = sum(Active))
+to_date_country_data <- to_date_data %>% 
+  group_by(Country_Region) %>% 
+  summarise(total_confirmed = sum(Confirmed), total_deaths = sum(Deaths), total_recovered = sum(Recovered), total_active = sum(Active))
+to_date_world <- sum(to_date_country_data$total_confirmed)
+```
+
+#Calculating State totals with pop
+```{r, echo=FALSE,  warning=FALSE, message=FALSE}
+state_pop_data <- read_excel("Census Pop Estimates by State.xlsx", range = "A3:D60")
+state_pop_data2 <- state_pop_data[,c(1:2)]
+state_pop_data3 <- state_pop_data2[c(7:57),]
+state_pop_data3$`Geographic Area` <- sub(".", "" ,state_pop_data3$`Geographic Area`)
+total_state_cases_pop<- left_join(state_pop_data3, to_date_state_data, by = c("Geographic Area" = "Province_State"))
+colnames(total_state_cases_pop)[2] = "population"
+total_case_per_pop_state <- total_state_cases_pop %>% 
+  mutate(cases_per_100thousand = (total_confirmed / population)*100000) %>% 
+  mutate(deaths_per_100thousand = (total_deaths / population)*100000) %>% 
+  mutate(death_rate = (total_deaths / total_confirmed)) %>% 
+  mutate(`Geographic Area` = tolower(`Geographic Area`))
+```
+
+#Calculating County totals with pop
+```{r, echo=FALSE,  warning=FALSE, message=FALSE}
+county_pop_data <- read_excel("County Pop Data Census.xlsx")
+county_pop_data2 <- county_pop_data[,c(1:7,19)]
+county_pop_data3 <- county_pop_data2 %>% 
+  mutate(county_fips = str_pad(COUNTY, 3, pad = "0")) %>% 
+  mutate(FIPS = paste0(STATE,county_fips))
+county_pop_data_final <- county_pop_data3[,c(8,10)]
+to_date_data$FIPS <- as.character(to_date_data$FIPS)
+current_county_cases_pop <- left_join(to_date_data, county_pop_data_final, by = "FIPS")
+current_county_cases_pop <- current_county_cases_pop %>% 
+  mutate(cases_per_100thousand = (Confirmed / POPESTIMATE2019)*100000)
+```
+
+#Final County totals with pop
+```{r, echo=FALSE,  warning=FALSE, message=FALSE}
+per_day_county_data <- all_data %>% 
+  filter(Country_Region == "US")
+per_day_county_data2 <- per_day_county_data[,c(1:3, 8:11, 13)]
+per_day_county_data2$FIPS <- as.character(per_day_county_data2$FIPS)
+per_day_county_data3 <- left_join(per_day_county_data2, county_pop_data_final, by = "FIPS")
+per_day_county_data4 <- per_day_county_data3 %>% 
+  mutate(FIPS = str_pad(FIPS, 5, pad = "0"))
+counties_with_names <- per_day_county_data4[,c(1:3)]
+unique_counties <- unique(counties_with_names)
+counties_days <- data.frame()
+for (i in 0:(as.numeric(difftime(as.Date(to_date), as.Date(start_date), units="days")) + 1)){
+  cur_date <- format(as.Date(start_date) + i, format="%m-%d-%Y")
+  cur_date_counties <- as.data.frame(unique_counties) %>% 
+    mutate(date = cur_date)
+  counties_days <- rbind(counties_days, cur_date_counties)
+}
+per_day_county_data4 <- per_day_county_data4[,-c(2:3)]
+per_day_county_final2 <- left_join(counties_days, per_day_county_data4, by = c("FIPS" = "FIPS", "date" = "Date"))
+per_day_county_final3 <- per_day_county_final2[!is.na(per_day_county_final2$FIPS),]
+per_day_county_final3 <- per_day_county_final3 %>% 
+  mutate(death_rate = Deaths / Confirmed)
+per_day_county_final3a <- per_day_county_final3 %>% 
+  group_by(FIPS) %>% 
+  mutate(Confirmed = Confirmed - lag(Confirmed)) %>%
+  mutate(Deaths = Deaths - lag(Deaths)) %>% 
+  mutate(Recovered = Recovered - lag(Recovered)) %>% 
+  mutate(Active = Active - lag(Active)) %>% 
+  mutate(death_rate = death_rate - lag(death_rate))
+per_day_county_final3b <- per_day_county_final3 %>% 
+  group_by(FIPS) %>% 
+  mutate(Confirmed = ((Confirmed - lag(Confirmed)) / lag(Confirmed))) %>%
+  mutate(Deaths = ((Deaths - lag(Deaths)) / lag(Deaths)))%>% 
+  mutate(Recovered = ((Recovered - lag(Recovered)) / lag(Recovered))) %>% 
+  mutate(Active = ((Active - lag(Active)) / lag(Active))) %>% 
+  mutate(death_rate = ((death_rate - lag(death_rate)) / lag(death_rate)))
+per_day_county_final3c <- per_day_county_final3 %>% 
+  group_by(FIPS) %>% 
+  mutate(Confirmed = ((log(2)) / (log(1+((Confirmed - lag(Confirmed)) / lag(Confirmed)))))) %>%
+  mutate(Deaths = ((log(2)) / (log(1+((Deaths - lag(Deaths)) / lag(Deaths))))))%>% 
+  mutate(Recovered = ((log(2)) / (log(1+((Recovered - lag(Recovered)) / lag(Recovered)))))) %>% 
+  mutate(Active = ((log(2)) / (log(1+((Active - lag(Active)) / lag(Active)))))) %>% 
+  mutate(death_rate = ((log(2)) / (log(1+((death_rate - lag(death_rate)) / lag(death_rate))))))
+per_day_county_final3d <- per_day_county_final3 %>% 
+  group_by(FIPS) %>% 
+  mutate(Confirmed = ((Confirmed - lag(Confirmed)) / POPESTIMATE2019)*100000) %>%
+  mutate(Deaths = ((Deaths - lag(Deaths)) / POPESTIMATE2019)*100000) %>% 
+  mutate(Recovered = ((Recovered - lag(Recovered)) / POPESTIMATE2019)*100000) %>% 
+  mutate(Active = ((Active - lag(Active)) / POPESTIMATE2019)*100000) %>% 
+  mutate(death_rate = ((death_rate - lag(death_rate)) / POPESTIMATE2019)*100000)
+per_day_county_final3e <- per_day_county_final3 %>% 
+  group_by(FIPS) %>% 
+  mutate(Confirmed = (Confirmed / POPESTIMATE2019)*100000) %>%
+  mutate(Deaths = (Deaths / POPESTIMATE2019)*100000) %>% 
+  mutate(Recovered = (Recovered / POPESTIMATE2019)*100000) %>% 
+  mutate(Active = (Active / POPESTIMATE2019)*100000) %>% 
+  mutate(death_rate = (death_rate / POPESTIMATE2019)*100000)
+per_day_county_final4 <- gather(per_day_county_final3, "variable", "value", c(5:8,10))
+per_day_county_final4a <- gather(per_day_county_final3a, "variable", "value", c(5:8,10))
+per_day_county_final4b <- gather(per_day_county_final3b, "variable", "value", c(5:8,10))
+per_day_county_final4c <- gather(per_day_county_final3c, "variable", "value", c(5:8,10))
+per_day_county_final4d <- gather(per_day_county_final3d, "variable", "value", c(5:8,10))
+per_day_county_final4e <- gather(per_day_county_final3e, "variable", "value", c(5:8,10))
+per_day_county_final4$category <- "value"
+per_day_county_final4a$category <- "change"
+per_day_county_final4b$category <- "percent_change"
+per_day_county_final4c$category <- "double"
+per_day_county_final4d$category <- "change_per_100_thousand"
+per_day_county_final4e$category <- "per_100_thousand"
+per_day_county_final4_combined <- dplyr::bind_rows(per_day_county_final4, per_day_county_final4a)
+per_day_county_final4_combined2 <- dplyr::bind_rows(per_day_county_final4_combined, per_day_county_final4b)
+per_day_county_final4_combined3 <- dplyr::bind_rows(per_day_county_final4_combined2, per_day_county_final4c)
+per_day_county_final4_combined4 <- dplyr::bind_rows(per_day_county_final4_combined3, per_day_county_final4d)
+per_day_county_final4_combined5 <- dplyr::bind_rows(per_day_county_final4_combined4, per_day_county_final4e)
+per_day_county_final5 <- per_day_county_final4_combined5 %>%
+  mutate(variable_name = ifelse(variable == "Confirmed", "Cases", ifelse(variable == "Deaths", "Deaths", ifelse(variable == "Recovered", "Recovered", ifelse(variable == "Active", "Active", ifelse(variable == "death_rate", "Death Rate", " ")))))) %>% 
+  mutate(category_name = ifelse(category == "value", "Total", ifelse(category == "per_100_thousand", "Per 100,000", ifelse(category == "change","Total Daily Change", ifelse(category == "percent_change", "Total Daily Percent Change", ifelse(category == "double", "Days to Double", "Total Daily Change Per 100,000")))))) %>%
+  mutate(tooltip = paste0("State: ",  Province_State, "<br/>",
+  "County: ", Admin2, "<br/>",                                                  
+  "Date: ", date, "<br/>", 
+  "Variable: ", variable_name, "<br/>",
+  "Category: ", category_name , "<br/>",
+  "Value: ", round(value, digits = 3)))
+  
+```
+
+#Final State totals with pop
+```{r echo=FALSE,  warning=FALSE, message=FALSE}
+per_day_state_data_pop <- per_day_state_data %>% 
+  filter(Country_Region == "US")
+all_data_state2 <- all_data_state %>% 
+  filter(Country_Region == "US")
+all_data_state3 <- all_data_state2[,c(1, 12:13, 19)]
+per_day_state_data_pop_combined <- left_join(per_day_state_data_pop, all_data_state3, by = c("Province_State" = "Province_State", "Date" = "date"))
+per_day_state_data_pop2 <- left_join(state_pop_data3, per_day_state_data_pop_combined, by = c("Geographic Area" = "Province_State"))
+colnames(per_day_state_data_pop2)[2] = "population"
+per_day_state_data_pop2 <- per_day_state_data_pop2 %>% 
+  mutate(death_rate = total_deaths / total_confirmed) %>% 
+  mutate(hospitalization_rate = People_Hospitalized / total_confirmed) %>% 
+  mutate(positive_rate = total_confirmed / People_Tested)
+per_day_state_data_pop2a <- per_day_state_data_pop2 %>% 
+  group_by(`Geographic Area`) %>% 
+  mutate(total_confirmed = total_confirmed - lag(total_confirmed)) %>%
+  mutate(total_deaths = total_deaths - lag(total_deaths)) %>% 
+  mutate(total_recovered = total_recovered - lag(total_recovered)) %>% 
+  mutate(total_active = total_active - lag(total_active)) %>% 
+  mutate(People_Tested = People_Tested - lag(People_Tested)) %>% 
+  mutate(People_Hospitalized = People_Hospitalized - lag(People_Hospitalized)) %>% 
+  mutate(death_rate = death_rate - lag(death_rate)) %>% 
+  mutate(hospitalization_rate = hospitalization_rate - lag(hospitalization_rate)) %>% 
+  mutate(positive_rate = positive_rate - lag(positive_rate))
+per_day_state_data_pop2b <- per_day_state_data_pop2 %>% 
+  group_by(`Geographic Area`) %>% 
+  mutate(total_confirmed = ((total_confirmed - lag(total_confirmed)) / lag(total_confirmed))) %>%
+  mutate(total_deaths = ((total_deaths - lag(total_deaths)) / lag(total_deaths)))%>% 
+  mutate(total_recovered = ((total_recovered - lag(total_recovered)) / lag(total_recovered))) %>% 
+  mutate(total_active = ((total_active - lag(total_active)) / lag(total_active))) %>% 
+  mutate(People_Tested = ((People_Tested - lag(People_Tested)) / lag(People_Tested))) %>% 
+  mutate(People_Hospitalized = ((People_Hospitalized - lag(People_Hospitalized))/ lag(People_Hospitalized))) %>% 
+  mutate(death_rate = ((death_rate - lag(death_rate))/ lag(death_rate))) %>% 
+  mutate(hospitalization_rate = ((hospitalization_rate - lag(hospitalization_rate))/ lag(hospitalization_rate))) %>% 
+  mutate(positive_rate = ((positive_rate - lag(positive_rate))/ lag(positive_rate)))
+per_day_state_data_pop2c <- per_day_state_data_pop2 %>% 
+  group_by(`Geographic Area`) %>% 
+  mutate(total_confirmed = ((log(2)) / (log(1+((total_confirmed - lag(total_confirmed)) / lag(total_confirmed)))))) %>%
+  mutate(total_deaths = ((log(2)) / (log(1+((total_deaths - lag(total_deaths)) / lag(total_deaths))))))%>% 
+  mutate(total_recovered = ((log(2)) / (log(1+((total_recovered - lag(total_recovered)) / lag(total_recovered)))))) %>% 
+  mutate(total_active = ((log(2)) / (log(1+((total_active - lag(total_active)) / lag(total_active)))))) %>% 
+  mutate(People_Tested = ((log(2)) / (log(1+((People_Tested - lag(People_Tested)) / lag(People_Tested)))))) %>% 
+  mutate(People_Hospitalized = ((log(2)) / (log(1+((People_Hospitalized - lag(People_Hospitalized))/ lag(People_Hospitalized)))))) %>% 
+  mutate(death_rate = ((log(2)) / (log(1+((death_rate - lag(death_rate))/ lag(death_rate)))))) %>% 
+  mutate(hospitalization_rate = ((log(2)) / (log(1+((hospitalization_rate - lag(hospitalization_rate))/ lag(hospitalization_rate)))))) %>% 
+  mutate(positive_rate = ((log(2)) / (log(1+((positive_rate - lag(positive_rate))/ lag(positive_rate))))))
+per_day_state_data_pop2d <- per_day_state_data_pop2 %>% 
+  group_by(`Geographic Area`) %>% 
+  mutate(total_confirmed = ((total_confirmed - lag(total_confirmed)) / population)*100000) %>%
+  mutate(total_deaths = ((total_deaths - lag(total_deaths)) / population)*100000) %>% 
+  mutate(total_recovered = ((total_recovered - lag(total_recovered)) / population)*100000) %>% 
+  mutate(total_active = ((total_active - lag(total_active)) / population)*100000) %>% 
+  mutate(People_Tested = ((People_Tested - lag(People_Tested)) / population)*100000) %>% 
+  mutate(People_Hospitalized = ((People_Hospitalized - lag(People_Hospitalized)) / population)*100000) %>% 
+  mutate(death_rate = ((death_rate - lag(death_rate)) / population)*100000) %>% 
+  mutate(hospitalization_rate = ((hospitalization_rate - lag(hospitalization_rate)) / population)*100000) %>% 
+  mutate(positive_rate = ((positive_rate - lag(positive_rate)) / population)*100000)
+per_day_state_data_pop_final2 <- gather(per_day_state_data_pop2, "variable", "value", 5:13)
+per_day_state_data_pop2a_final <- gather(per_day_state_data_pop2a, "variable", "value", 5:13)
+per_day_state_data_pop2b_final <- gather(per_day_state_data_pop2b, "variable", "value", 5:13)
+per_day_state_data_pop2c_final <- gather(per_day_state_data_pop2c, "variable", "value", 5:13)
+per_day_state_data_pop2d_final <- gather(per_day_state_data_pop2d, "variable", "value", 5:13)
+per_day_state_data_pop_final2$category <- "value"
+per_day_state_data_pop2a_final$category <- "change"
+per_day_state_data_pop2b_final$category <- "percent_change"
+per_day_state_data_pop2c_final$category <- "double"
+per_day_state_data_pop2d_final$category <- "change_per_100_thousand"
+per_day_state_data_pop_final2a <- per_day_state_data_pop_final2 %>% 
+  mutate(value = (value / population)*100000)
+per_day_state_data_pop_final2a$category <- "per_100_thousand"
+per_day_state_data_pop_final2_combined <- rbind(per_day_state_data_pop_final2, per_day_state_data_pop_final2a)
+per_day_state_data_pop_final2_combined2 <- dplyr::bind_rows(per_day_state_data_pop_final2_combined, per_day_state_data_pop2a_final)
+per_day_state_data_pop_final2_combined3 <- dplyr::bind_rows(per_day_state_data_pop_final2_combined2, per_day_state_data_pop2b_final)
+per_day_state_data_pop_final2_combined4 <- dplyr::bind_rows(per_day_state_data_pop_final2_combined3, per_day_state_data_pop2c_final)
+per_day_state_data_pop_final2_combined5 <- dplyr::bind_rows(per_day_state_data_pop_final2_combined4, per_day_state_data_pop2d_final)
+colnames(per_day_state_data_pop_final2_combined5)[1] <- "state_name"
+per_day_state_data_pop_final3 <- per_day_state_data_pop_final2_combined5 %>%
+  mutate(variable_name = ifelse(variable == "total_confirmed", "Cases", ifelse(variable == "total_deaths", "Deaths", ifelse(variable == "total_active", "Active", ifelse(variable == "total_recovered", "Recovered", ifelse(variable == "People_Hospitalized", "Hospitalized", ifelse(variable == "People_Tested", "Teseted", ifelse(variable == "death_rate", "Death Rate", ifelse(variable == "hospitalization_rate", "Hospitalization Rate", ifelse(category == "positive_rate", "Positive Rate", " ")))))))))) %>% 
+  mutate(category_name = ifelse(category == "value", "Total", ifelse(category == "per_100_thousand", "Per 100,000", ifelse(category == "change","Total Daily Change", ifelse(category == "percent_change", "Total Daily Percent Change", ifelse(category == "double", "Days to Double", "Total Daily Change Per 100,000")))))) %>% 
+  mutate(tooltip = paste0("State: ", state_name, "<br/>",
+  "Date: ", Date , "<br/>",
+  "Variable: ", variable_name, "<br/>",
+  "Category: ", category_name , "<br/>",
+  "Value: ", round(value, digits = 3)))
+```
+
+
+#Select columns from final data sets
+```{r}
+per_day_county_final6 <- per_day_county_final5[,-c(5,9:10)]
+per_day_state_data_pop_final4 <- per_day_state_data_pop_final3[,-c(2,4, 8:9)]
+per_day_US_final2 <- per_day_US_final[,-c(6,7)]
+per_day_country_data_final2 <- per_day_country_data_final[,-c(4,8:9)]
+```
+
+#Write out final data sets
+```{r}
+write.csv(per_day_state_data_pop_final4, "state_data_final3_test33.csv")
+write.csv(per_day_county_final6, "county_data_final4_test30.csv")
+write.csv(per_day_US_final2, "US_data_final2_test15.csv")
+write.csv(per_day_country_data_final2, "country_data_final2_test10.csv")
+```
